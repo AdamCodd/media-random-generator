@@ -1,6 +1,6 @@
 
 const site_url = "https://i.imgur.com/";
-const MAX_QUEUE = 100;
+const MAX = 100;
 const links = [];
 
 const container = document.getElementById("imgur-images");
@@ -22,7 +22,7 @@ function get_link() {
 }
 
 function start() {
-    repeat(load_image, Math.min(MAX_QUEUE, setnumber.value));
+    repeat(load_image, Math.min(MAX, setnumber.value));
     container.appendChild(fragment);
 } start();
 
