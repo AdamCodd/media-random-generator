@@ -1,31 +1,89 @@
-const site_url = "https://i.imgur.com/";
+// Constants
 const MAX = 100;
-const links = new Set();  // Changed to Set for O(1) lookups
+const STREAMABLE_LIMIT = 5;
+const links = new Set();  // Cache
 
-const container = document.getElementById("imgur-images");
+// HTML Elements
+const container = document.getElementById("media-container");
 const reload = document.getElementById("reload");
 const setnumber = document.getElementById("setnumber");
+const serviceSelector = document.getElementById("serviceSelector");
 
-const fragment = document.createDocumentFragment();  // Use `const` as it doesn't change
+// Counter for Streamable links
+let streamableCount = 0;  // New counter
 
-const chars = "abcdefgihjklmnopqrstuvwxyz";
-const characters = chars + chars.toUpperCase() + "1234567890";  // Pre-compute character set
+// Precompute Character Sets
+const allChars = "abcdefgihjklmnopqrstuvwxyz";
+const allCharsUpper = allChars.toUpperCase();
+const allNumbers = "1234567890";
+const characters = allChars + allCharsUpper + allNumbers;
 
-function get_link() {
+function getImgurLink() {
     let code = '';
     for (let i = 0; i < 5; i++) {
         code += characters[Math.floor(Math.random() * characters.length)];
     }
-    return `${site_url}${code}.jpg`;
+    return `https://i.imgur.com/${code}.jpg`;
+}
+
+
+function getStreamableLink() {
+    let alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
+    let code = '';
+    for (let i = 0; i < 6; i++) {
+        code += alphabet[Math.floor(Math.random() * alphabet.length)];
+    }
+    return `https://streamable.com/${code}`;
+}
+
+function getLink() {
+    const service = serviceSelector.value;
+    if (service === "imgur") {
+        return getImgurLink();
+    } else if (service === "streamable") {
+        return getStreamableLink();
+    }
+}
+
+function load_streamable() {
+    if (streamableCount >= STREAMABLE_LIMIT) {  // Check the limit
+        return;
+    }
+  
+    let randomCode = getStreamableLink().split("com/")[1];
+    let randomUrl = `https://api.streamable.com/oembed.json?url=https://streamable.com/${randomCode}`;
+    
+    $.getJSON(randomUrl)
+    .done(function(data) {
+        let iframe = document.createElement("iframe");
+        iframe.src = `https://streamable.com/${randomCode}`;
+        iframe.className = "streamable-video";
+        iframe.style.width = "100vw";
+        iframe.style.height = "50vh";
+        container.appendChild(iframe);
+      
+        streamableCount++;  // Increment the counter
+    })
+    .fail(function(data) {
+        setTimeout(() => {
+            load_streamable();
+        }, Math.floor(Math.random() * 100));
+    });
 }
 
 function start() {
-    const numImages = Math.min(MAX, Number(setnumber.value));
-    for (let i = 0; i < numImages; i++) {
-        load_image();
+    container.textContent = '';  // Clear the container
+    streamableCount = 0;  // Reset the counter
+    const numItems = Math.min(MAX, Number(setnumber.value));
+    for (let i = 0; i < numItems; i++) {
+        if (serviceSelector.value === "streamable") {
+            load_streamable();
+        } else {
+            load_media();
+        }
     }
-    container.appendChild(fragment);
 }
+
 start();
 
 reload.addEventListener('click', () => {
@@ -33,10 +91,11 @@ reload.addEventListener('click', () => {
     start();
 });
 
-function load_image() {
-    const link = get_link();
-    if (!links.has(link)) {  // O(1) lookup
-        fetch(link)
+function load_media() {
+    const link = getLink();
+    if (!links.has(link)) {
+        if (serviceSelector.value === "imgur") {
+            fetch(link)
             .then(res => res.ok ? res.blob() : Promise.reject(res))
             .then(blob => {
                 const newImg = new Image();
@@ -45,15 +104,15 @@ function load_image() {
                 newImg.setAttribute("data-link", link);
                 newImg.onload = () => {
                     if (newImg.naturalWidth === 161 && newImg.naturalHeight) {
-                        load_image();
+                        load_media();
                         return;
                     }
-                    fragment.appendChild(newImg);
-                    container.appendChild(fragment);
+                    container.appendChild(newImg);
                 }
                 newImg.onclick = () => window.open(link, '_blank').focus();
             })
             .catch(error => console.log('Something went wrong.', error));
-        links.add(link);  // O(1) insertion
+       }
+       links.add(link);
     }
 }
