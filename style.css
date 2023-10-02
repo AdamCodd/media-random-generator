@@ -3,6 +3,11 @@
     text-align: center;
 }
 
+#serviceSelector {
+    padding: 0.1em 0.5em;
+    font-size: 1em;
+}
+
 #content {
     margin: 50px 0;
 }
@@ -23,7 +28,7 @@ img.imgur-image {
 }
 
 #reload, #setnumber {
-    padding: 10px 20px;
+    padding: 0.1em 0.5em;
     font-size: 1em;
 }
 
