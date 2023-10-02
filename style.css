@@ -35,12 +35,12 @@ img.imgur-image {
 #back-to-top {
     position: fixed;
     bottom: 20px;
-    right: 20px;
+    right: 10px;
     display: none;
-    padding: 10px 20px;
-    font-size: 2em;
+    padding: 0.3em 0.5em;
+    font-size: 1.5em;
     cursor: pointer;
-    background-color: #f2f2f2;
+    background-color: #e3e3e3;
     border: none;
     border-radius: 5px;
 }
