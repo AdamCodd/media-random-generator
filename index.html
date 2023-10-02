@@ -3,19 +3,21 @@
 <head>
     <meta charset="UTF-8">
     <title>Media Generator</title>
+    <link rel="stylesheet" href="styles.css">
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <script src="script.js" defer></script>
 </head>
 <body>
-    <div>
+    <div id="header-container">
         <h1>Random Media Generator</h1>
-			<select id="serviceSelector">
-				<option value="imgur">Imgur</option>
-				<option value="streamable">Streamable</option>
-			</select>
+        <select id="serviceSelector">
+            <option value="imgur">Imgur</option>
+            <option value="streamable">Streamable</option>
+        </select>
         <button id="reload">Reload</button>
         <input id="setnumber" type="number" value="1" min="1" max="100">
     </div>
     <div id="media-container"></div>
+    <button id="back-to-top">Back to Top</button>
 </body>
 </html>
