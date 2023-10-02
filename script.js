@@ -1,15 +1,19 @@
+// Configuration
 const MAX = 500;
 const STREAMABLE_LIMIT = 5;
+
+// State variables
 const links = new Set();  
 let blockedUrls = new Set();  // To store previously used URLs
-let successfulLoads = 0; // Counter for successful image loads
+let successfulLoads = 0;
+let streamableCount = 0; 
 
+// DOM elements
 const container = document.getElementById("media-container");
 const reload = document.getElementById("reload");
 const setnumber = document.getElementById("setnumber");
 const serviceSelector = document.getElementById("serviceSelector");
 
-let streamableCount = 0; 
 
 const allChars = "abcdefgihjklmnopqrstuvwxyz";
 const allCharsUpper = allChars.toUpperCase();
@@ -17,19 +21,27 @@ const allNumbers = "1234567890";
 const characters = allChars + allCharsUpper + allNumbers;
 
 // Initialize IndexedDB
-let db;
-const indexedDBOpenRequest = indexedDB.open("myDatabase", 2); // Incremented version number
-indexedDBOpenRequest.onupgradeneeded = function(event) {
-  db = event.target.result;
-  if (!db.objectStoreNames.contains("blockedUrls")) {
-    db.createObjectStore("blockedUrls", { keyPath: "url" });
-  }
-};
+let db = null;
+let indexedDBSupported = 'indexedDB' in window;
 
-
-indexedDBOpenRequest.onerror = function() {
-  console.error("IndexedDB not opened:", this.error);
-};
+if (indexedDBSupported) {
+  const indexedDBOpenRequest = indexedDB.open("myDatabase", 2);
+  indexedDBOpenRequest.onupgradeneeded = function(event) {
+    db = event.target.result;
+    if (!db.objectStoreNames.contains("blockedUrls")) {
+      db.createObjectStore("blockedUrls", { keyPath: "url" });
+    }
+  };
+  indexedDBOpenRequest.onerror = function() {
+    console.error("IndexedDB not opened:", this.error);
+  };
+  indexedDBOpenRequest.onsuccess = function(event) {
+    db = event.target.result;
+    loadBlockedUrls();
+  };
+} else {
+  console.warn("IndexedDB is not supported in this browser. Using in-memory storage.");
+}
 
 
 function getImgurLink() {
@@ -151,6 +163,7 @@ function loadMedia() {
 
 // Load previously used URLs from IndexedDB
 async function loadBlockedUrls() {
+  if (!db) return; // Skip if IndexedDB is not initialized
   return new Promise((resolve, reject) => {
     const transaction = db.transaction("blockedUrls", "readonly");
     const objectStore = transaction.objectStore("blockedUrls");
@@ -173,6 +186,7 @@ async function loadBlockedUrls() {
 
 // Save used URLs to IndexedDB
 function saveBlockedUrls() {
+  if (!db) return; // Skip if IndexedDB is not initialized
   const transaction = db.transaction("blockedUrls", "readwrite");
   const objectStore = transaction.objectStore("blockedUrls");
   
