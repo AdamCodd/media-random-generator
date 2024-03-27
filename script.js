@@ -14,11 +14,7 @@ const reload = document.getElementById("reload");
 const setnumber = document.getElementById("setnumber");
 const serviceSelector = document.getElementById("serviceSelector");
 
-
-const allChars = "abcdefgihjklmnopqrstuvwxyz";
-const allCharsUpper = allChars.toUpperCase();
-const allNumbers = "1234567890";
-const characters = allChars + allCharsUpper + allNumbers;
+const characters = "abcdefgihjklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
 
 // Initialize IndexedDB
 let db = null;
@@ -112,10 +108,7 @@ function start() {
 }
 
 
-reload.addEventListener('click', () => {
-    container.textContent = '';
-    start();
-});
+reload.addEventListener('click', start); // Optimized to directly use the 'start' function
 
 
 function loadMedia() {
@@ -186,16 +179,20 @@ async function loadBlockedUrls() {
 
 // Save used URLs to IndexedDB
 function saveBlockedUrls() {
-  if (!db) return; // Skip if IndexedDB is not initialized
+  if (!db) return;  // Skip if IndexedDB is not initialized
   const transaction = db.transaction("blockedUrls", "readwrite");
   const objectStore = transaction.objectStore("blockedUrls");
+
+  // Optimized to use a single transaction
+  blockedUrls.forEach(url => {
+    objectStore.put({ url });
+  });
   
-  for (const url of blockedUrls) {
-    const putRequest = objectStore.put({ url: url });
-    putRequest.onerror = function(event) {
-      console.error("Error storing data", event.target.error);
-    };
-  }
+  // Handle a transaction error
+  transaction.onerror = function(event) {
+    console.error("Transaction error in saving blocked URLs:", transaction.error);
+  };
+ 
 }
 
 // Return to top
