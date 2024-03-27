@@ -1,5 +1,5 @@
 # Media random generator
-This is a small JS script that fetches a random image from Imgur (maximum 100) or random Streamable videos (up to 5).\
+This is a simple JS script that can efficiently retrieve a random image from Imgur (up to 500) or random Streamable videos (up to 5), using IndexedDB to avoid duplicates.\
 You can test it here: [https://adamcodd.github.io/media-random-generator](https://adamcodd.github.io/media-random-generator/)
 ## Imgur generator
 Click on the image to view the full size version.\
