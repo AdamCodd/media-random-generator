@@ -8,6 +8,7 @@ const links = new Set();
 let blockedUrls = new Set();  // To store previously used URLs
 let successfulLoads = 0;
 let streamableCount = 0; 
+let modelLoaded = false; // To track if the WASM model is loaded
 
 // DOM elements
 const container = document.getElementById("media-container");
@@ -118,6 +119,14 @@ classifierWorker.onmessage = function(e) {
         console.error('Classification error:', e.data.details);
         return;
     }
+
+    if (e.data.modelLoaded) {
+        modelLoaded = true;
+        console.log("Model is now loaded and ready for classification.");
+        reload.disabled = false; // Enable the load button if the model is loaded
+        return;
+    }
+
     const { results, batchLinks } = e.data;
     results.forEach((resultArray, index) => {
         if (successfulLoads >= Number(setnumber.value)) return; // Check load limit
@@ -148,7 +157,6 @@ classifierWorker.onmessage = function(e) {
         loadMedia(); // Continue loading media if not reached the desired number
     }
 };
-
 
 function loadMedia() {
     const desiredNum = Number(document.getElementById("setnumber").value);
@@ -282,6 +290,17 @@ function saveBlockedUrls() {
     console.error("Transaction error in saving blocked URLs:", transaction.error);
   };
 }
+
+// Event listener to update button status based on classification selector changes
+function updateLoadButtonStatus() {
+    if ((classificationSelector.value.toLowerCase() === "sfw" || classificationSelector.value.toLowerCase() === "nsfw") && !modelLoaded) {
+        reload.disabled = true;
+        console.log("Waiting for model to load before enabling 'Load' button for SFW/NSFW classification.");
+    } else {
+        reload.disabled = false;
+    }
+}
+classificationSelector.addEventListener('change', updateLoadButtonStatus);
 
 // Return to top
 document.addEventListener('DOMContentLoaded', function() {
