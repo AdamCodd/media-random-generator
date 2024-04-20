@@ -4,5 +4,8 @@ You can test it here: [https://adamcodd.github.io/media-random-generator](https:
 ## Imgur generator
 Click on the image to view the full size version.\
 <b>Warning</b>: Some images might be NSFW. All content displayed here belongs to its respective authors.
+### Image classification
+Thanks to [transformer.js](https://github.com/xenova/transformers.js), I'm able to run my quantized ONNX image classification model directly in the browser using only vanilla JavaScript. Although it's a bit slow and there are some false positives due to the quantization, it works effectively. You can select SFW/NSFW to display only those types of images from random Imgur selections.
+
 ## Streamable generator
 Once you click on "reload," wait for a moment until you receive a functional URL; it will open a streamable stream in an iframe.
