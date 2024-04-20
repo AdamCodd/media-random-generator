@@ -5,7 +5,7 @@ You can test it here: [https://adamcodd.github.io/media-random-generator](https:
 Click on the image to view the full size version.\
 <b>Warning</b>: Some images might be NSFW. All content displayed here belongs to its respective authors.
 ### Image classification
-Thanks to [transformer.js](https://github.com/xenova/transformers.js), I'm able to run my quantized ONNX [image classification model](https://huggingface.co/AdamCodd/vit-base-nsfw-detector) directly in the browser using only vanilla JavaScript. Although it's a bit slow and there are some false positives/negatives due to the quantization, it works effectively. You can select SFW/NSFW to display only those types of images from random Imgur selections. 
+Thanks to [transformer.js](https://github.com/xenova/transformers.js), I'm able to run my quantized ONNX [image classification model](https://huggingface.co/AdamCodd/vit-base-nsfw-detector) directly in the browser using only vanilla JavaScript. Although it's a bit slow and there are some false positives/negatives due to the quantization, it works effectively (don't try more than 10 images at once). You can select SFW/NSFW to display only those types of images from random Imgur selections. 
 
 Because of the ES6 modules, if you want to run the script locally you'll need a server environment (npm/python HTTP server). The easiest way if you have python 3.x installed:
 ```
