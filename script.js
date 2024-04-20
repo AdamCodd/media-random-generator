@@ -11,6 +11,7 @@ console.log('Ready');
 // Configuration
 const MAX = 500;
 const STREAMABLE_LIMIT = 5;
+const MAX_BLOCKED_URLS = 1000; // Maximum number of blocked URLs to store
 
 // State variables
 const links = new Set();  
@@ -49,7 +50,6 @@ if (indexedDBSupported) {
 } else {
   console.warn("IndexedDB is not supported in this browser. Using in-memory storage.");
 }
-
 
 function getImgurLink() {
     let code = '';
@@ -251,7 +251,6 @@ async function classifyAndDisplayImages(images, links, desiredNum) {
 }
 
 
-
 // Load previously used URLs from IndexedDB
 async function loadBlockedUrls() {
   if (!db) return; // Skip if IndexedDB is not initialized
@@ -275,22 +274,21 @@ async function loadBlockedUrls() {
   });
 }
 
-// Save used URLs to IndexedDB
+// Save used URLs to IndexedDB, ensuring the count doesn't exceed the set limit
 function saveBlockedUrls() {
-  if (!db) return;  // Skip if IndexedDB is not initialized
+  if (!db || blockedUrls.size <= MAX_BLOCKED_URLS) return;  // Skip if IndexedDB is not initialized or no new URLs
   const transaction = db.transaction("blockedUrls", "readwrite");
   const objectStore = transaction.objectStore("blockedUrls");
 
-  // Optimized to use a single transaction
-  blockedUrls.forEach(url => {
+  // Only store the latest MAX_BLOCKED_URLS entries
+  const urlsToStore = Array.from(blockedUrls).slice(-MAX_BLOCKED_URLS);
+  urlsToStore.forEach(url => {
     objectStore.put({ url });
   });
-  
-  // Handle a transaction error
+
   transaction.onerror = function(event) {
     console.error("Transaction error in saving blocked URLs:", transaction.error);
   };
- 
 }
 
 // Return to top
