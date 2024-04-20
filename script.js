@@ -1,17 +1,7 @@
-import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.1';
-
-// Since we will download the model from the Hugging Face Hub, we can skip the local model check
-env.allowLocalModels = false;
-
-// Create a new image classification pipeline
-console.log('Loading model...');
-const classifier = await pipeline('image-classification', 'AdamCodd/vit-base-nsfw-detector');
-console.log('Ready');
-
 // Configuration
 const MAX = 500;
 const STREAMABLE_LIMIT = 5;
-const MAX_BLOCKED_URLS = 1000; // Maximum number of blocked URLs to store
+const MAX_BLOCKED_URLS = 10000; // Maximum number of blocked URLs to store
 
 // State variables
 const links = new Set();  
@@ -120,22 +110,60 @@ function start() {
 
 reload.addEventListener('click', start); // Optimized to directly use the 'start' function
 
+// Initialize web worker for classification
+const classifierWorker = new Worker('classifierWorker.js', { type: 'module' });
+
+classifierWorker.onmessage = function(e) {
+    if (e.data.error) {
+        console.error('Classification error:', e.data.details);
+        return;
+    }
+    const { results, batchLinks } = e.data;
+    results.forEach((resultArray, index) => {
+        if (successfulLoads >= Number(setnumber.value)) return; // Check load limit
+
+        // Ensure the resultArray is not empty and has a label
+        if (!resultArray.length || !resultArray[0].label) {
+            console.error("No valid label in result:", resultArray);
+            return;
+        }
+
+        const result = resultArray[0]; // Assuming the first item is the relevant classification
+        const classification = result.label.toLowerCase();
+        const score = result.score; // Assuming the score is also provided
+        const url = batchLinks[index].link; // The URL associated with this classification
+
+        // Log the classification, score, and URL to the console
+        console.log(`Classification: ${classification}, Score: ${score.toFixed(2)}, URL: ${url}`);
+
+        const selectedFilter = classificationSelector.value.toLowerCase();
+        if (selectedFilter === classification) {
+            displayImage(batchLinks[index].img, url);
+        } else {
+            console.log("Image does not match filter, not displaying...");
+            loadMedia(); // Fetch and process more images
+        }
+    });
+    if (successfulLoads < Number(setnumber.value)) {
+        loadMedia(); // Continue loading media if not reached the desired number
+    }
+};
+
+
 function loadMedia() {
     const desiredNum = Number(document.getElementById("setnumber").value);
     if (successfulLoads >= desiredNum) {
-        return; // Stop processing if the desired number is already met
+        return; // All desired images are already processed
     }
 
     let counterBatch = 0;
     let batchSize = 4;
-    let batchImgs = [];
     let batchLinks = [];
     let imagePromises = [];
 
     const processBatch = () => {
-        if (batchImgs.length > 0 && successfulLoads < desiredNum) {
-            classifyAndDisplayImages(batchImgs, batchLinks, desiredNum);
-            batchImgs = [];
+        if (batchLinks.length > 0 && successfulLoads < desiredNum) {
+            classifierWorker.postMessage({ links: batchLinks, classificationType: classificationSelector.value });
             batchLinks = [];
             counterBatch = 0;
         }
@@ -143,44 +171,35 @@ function loadMedia() {
 
     const processImage = (link) => {
         return new Promise((resolve, reject) => {
-            if (successfulLoads >= desiredNum) {
-                resolve('No more processing needed, limit reached.');
-                return;
-            }
             if (!links.has(link) && !blockedUrls.has(link)) {
                 links.add(link);
                 fetch(link)
                     .then(res => res.ok ? res.blob() : Promise.reject('Failed to load image'))
                     .then(blob => {
-                        const newImg = new Image();
-                        newImg.src = URL.createObjectURL(blob);
-                        newImg.onload = () => {
-                            if (newImg.naturalWidth === 161 && newImg.naturalHeight === 81) {
-                                resolve('Placeholder image, retrying...');
-                                loadMedia(); // Retry if placeholder image
+                        const imgUrl = URL.createObjectURL(blob);
+                        const img = new Image();
+                        img.src = imgUrl;
+                        img.onload = () => {
+                            if (img.naturalWidth === 161 && img.naturalHeight === 81 || successfulLoads >= desiredNum) {
+                                URL.revokeObjectURL(imgUrl); // Handle placeholder or max load
+                                resolve('Not processing, retrying or stopping...');
+                                if (successfulLoads < desiredNum) loadMedia();
+                            } else if (classificationSelector.value === 'All') {
+                                displayImage(imgUrl, link); // Direct display without classification
+                                resolve('Image displayed without classification.');
                             } else {
-                                if (classificationSelector.value === 'All') {
-                                    displayImage(newImg, link);
-                                    resolve('Image displayed without classification.');
-                                } else {
-                                    batchImgs.push(newImg);
-                                    batchLinks.push(link);
-                                    counterBatch++;
-                                    if (counterBatch >= batchSize) {
-                                        processBatch();
-                                    }
-                                    resolve('Image loaded and batched for classification.');
-                                }
+                                batchLinks.push({ img: imgUrl, link: link });
+                                counterBatch++;
+                                if (counterBatch >= batchSize) processBatch();
+                                resolve('Image loaded and batched for classification.');
                             }
                         };
-                        newImg.onerror = () => {
+                        img.onerror = () => {
+                            URL.revokeObjectURL(imgUrl);
                             console.error('Image failed to load.');
                             resolve('Image load error, retrying...');
                             loadMedia();
                         };
-                        newImg.className = "imgur-image";
-                        newImg.setAttribute("data-link", link);
-                        newImg.onclick = () => window.open(link, '_blank').focus();
                     })
                     .catch(error => {
                         console.error(error);
@@ -190,64 +209,37 @@ function loadMedia() {
                         loadMedia();
                     });
             } else {
-                resolve('Duplicate link, retrying...');
-                loadMedia(); // Retry if duplicate link
+                resolve('Duplicate link, skipping...');
             }
         });
     };
 
     for (let i = 0; i < Math.min(desiredNum - successfulLoads, batchSize); i++) {
-        if (successfulLoads >= desiredNum) break; // Prevent over-fetching
         imagePromises.push(processImage(getLink()));
     }
 
     Promise.all(imagePromises).then(() => {
-        if (successfulLoads < desiredNum) {
-            processBatch(); // Only process the final batch if under the limit
-        }
+        if (successfulLoads < desiredNum) processBatch();
     });
 }
 
-function displayImage(img, link) {
-    if (successfulLoads < Number(document.getElementById("setnumber").value)) {
-        container.appendChild(img);
-        blockedUrls.add(link);
-        saveBlockedUrls();
-        successfulLoads++;
-    }
-}
+function displayImage(imgUrl, link) {
+    const img = new Image();
+    img.src = imgUrl;
 
-async function classifyAndDisplayImages(images, links, desiredNum) {
-    if (successfulLoads >= desiredNum) {
-        return; // Stop processing if the desired number of images has been reached
-    }
+    // Set additional attributes and event listeners
+    img.className = "imgur-image"; 
+    img.setAttribute("data-link", link);
+    img.onclick = () => window.open(link, '_blank').focus();
 
-    try {
-        const srcs = images.map(img => img.src);
-        const classificationResults = await classifier(srcs);
-        classificationResults.forEach((result, index) => {
-            if (successfulLoads >= desiredNum) {
-                return; // Stop processing current batch if the desired number is reached
-            }
+    // Append the image to the DOM and update the application state
+    container.appendChild(img); 
+    blockedUrls.add(link); 
+    saveBlockedUrls(); 
 
-            const classification = result.label.toLowerCase();
-            const selectedFilter = classificationSelector.value.toLowerCase();
+    successfulLoads++;
 
-            console.log("Image is classified as:", classification);
-            if (selectedFilter === classification) {
-                displayImage(images[index], links[index]);
-            } else {
-                console.log("Image does not match filter, not displaying...");
-                // Ensuring that the loop continues to fetch and classify new images if the condition is not met
-                if (successfulLoads < desiredNum) {
-                    loadMedia(); // Fetch and process more images
-                }
-            }
-        });
-    } catch (error) {
-        console.error('Error during classification or image display:', error);
-        loadMedia(); // Continue processing in case of error
-    }
+    URL.revokeObjectURL(imgUrl);
 }
 
 
