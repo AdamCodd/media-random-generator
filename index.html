@@ -5,7 +5,7 @@
     <title>Media Generator</title>
     <link rel="stylesheet" href="style.css">
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-    <script src="script.js" defer></script>
+    <script type="module" src="script.js" defer></script>
 </head>
 <body>
     <div id="header-container">
@@ -14,7 +14,12 @@
             <option value="imgur">Imgur</option>
             <option value="streamable">Streamable</option>
         </select>
-        <button id="reload">Reload</button>
+		<select id="classificationSelector">
+            <option value="All">ALL</option>
+            <option value="Sfw">SFW</option>
+			<option value="Nsfw">NSFW</option>
+        </select>
+        <button id="load">LOAD</button>
         <input id="setnumber" type="number" value="1" min="1" max="100">
     </div>
     <div id="media-container"></div>
