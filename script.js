@@ -1,3 +1,13 @@
+import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.1';
+
+// Since we will download the model from the Hugging Face Hub, we can skip the local model check
+env.allowLocalModels = false;
+
+// Create a new image classification pipeline
+console.log('Loading model...');
+const classifier = await pipeline('image-classification', 'AdamCodd/vit-base-nsfw-detector');
+console.log('Ready');
+
 // Configuration
 const MAX = 500;
 const STREAMABLE_LIMIT = 5;
@@ -10,9 +20,10 @@ let streamableCount = 0;
 
 // DOM elements
 const container = document.getElementById("media-container");
-const reload = document.getElementById("reload");
+const reload = document.getElementById("load");
 const setnumber = document.getElementById("setnumber");
 const serviceSelector = document.getElementById("serviceSelector");
+const classificationSelector = document.getElementById("classificationSelector");
 
 const characters = "abcdefgihjklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
 
@@ -107,51 +118,138 @@ function start() {
     }
 }
 
-
 reload.addEventListener('click', start); // Optimized to directly use the 'start' function
 
-
 function loadMedia() {
-    const desiredNum = Number(document.getElementById("setnumber").value); // Get the desired number of images from the input
-
-    if (successfulLoads >= desiredNum) { // Use the desired number here
-        return;
+    const desiredNum = Number(document.getElementById("setnumber").value);
+    if (successfulLoads >= desiredNum) {
+        return; // Stop processing if the desired number is already met
     }
 
-    const link = getLink();
-    if (!links.has(link) && !blockedUrls.has(link)) {
-        if (serviceSelector.value === "imgur") {
-            fetch(link)
-            .then(res => res.ok ? res.blob() : Promise.reject(res))
-            .then(blob => {
-                const newImg = new Image();
-                newImg.src = URL.createObjectURL(blob);
-                newImg.className = "imgur-image";
-                newImg.setAttribute("data-link", link);
-                newImg.onload = () => {
-                    if (newImg.naturalWidth === 161 && newImg.naturalHeight === 81) {
-                        loadMedia(); // Try again if the image is a placeholder
-                        return;
-                    }
-                    container.appendChild(newImg);
-                    blockedUrls.add(link); // Add the successful imgur URL to blockedUrls
-        	    saveBlockedUrls(); 
-                    successfulLoads++; // Increment successful load counter 
-                }
-                newImg.onclick = () => window.open(link, '_blank').focus();
-            })
-            .catch(error => {
-                console.log('Something went wrong.', error);
-                blockedUrls.add(link); // Add the failed URL to blockedUrls
-    		saveBlockedUrls(); // Save the failed URL to IndexedDB
-                loadMedia(); // Try again if the fetch fails
-            });
+    let counterBatch = 0;
+    let batchSize = 4;
+    let batchImgs = [];
+    let batchLinks = [];
+    let imagePromises = [];
+
+    const processBatch = () => {
+        if (batchImgs.length > 0 && successfulLoads < desiredNum) {
+            classifyAndDisplayImages(batchImgs, batchLinks, desiredNum);
+            batchImgs = [];
+            batchLinks = [];
+            counterBatch = 0;
         }
-        links.add(link);
-    } else {
-        loadMedia(); // Try again if the URL is a duplicate
+    };
+
+    const processImage = (link) => {
+        return new Promise((resolve, reject) => {
+            if (successfulLoads >= desiredNum) {
+                resolve('No more processing needed, limit reached.');
+                return;
+            }
+            if (!links.has(link) && !blockedUrls.has(link)) {
+                links.add(link);
+                fetch(link)
+                    .then(res => res.ok ? res.blob() : Promise.reject('Failed to load image'))
+                    .then(blob => {
+                        const newImg = new Image();
+                        newImg.src = URL.createObjectURL(blob);
+                        newImg.onload = () => {
+                            if (newImg.naturalWidth === 161 && newImg.naturalHeight === 81) {
+                                resolve('Placeholder image, retrying...');
+                                loadMedia(); // Retry if placeholder image
+                            } else {
+                                if (classificationSelector.value === 'All') {
+                                    displayImage(newImg, link);
+                                    resolve('Image displayed without classification.');
+                                } else {
+                                    batchImgs.push(newImg);
+                                    batchLinks.push(link);
+                                    counterBatch++;
+                                    if (counterBatch >= batchSize) {
+                                        processBatch();
+                                    }
+                                    resolve('Image loaded and batched for classification.');
+                                }
+                            }
+                        };
+                        newImg.onerror = () => {
+                            console.error('Image failed to load.');
+                            resolve('Image load error, retrying...');
+                            loadMedia();
+                        };
+                        newImg.className = "imgur-image";
+                        newImg.setAttribute("data-link", link);
+                        newImg.onclick = () => window.open(link, '_blank').focus();
+                    })
+                    .catch(error => {
+                        console.error(error);
+                        blockedUrls.add(link);
+                        saveBlockedUrls();
+                        resolve('Fetch error, retrying...');
+                        loadMedia();
+                    });
+            } else {
+                resolve('Duplicate link, retrying...');
+                loadMedia(); // Retry if duplicate link
+            }
+        });
+    };
+
+    for (let i = 0; i < Math.min(desiredNum - successfulLoads, batchSize); i++) {
+        if (successfulLoads >= desiredNum) break; // Prevent over-fetching
+        imagePromises.push(processImage(getLink()));
+    }
+
+    Promise.all(imagePromises).then(() => {
+        if (successfulLoads < desiredNum) {
+            processBatch(); // Only process the final batch if under the limit
+        }
+    });
+}
+
+function displayImage(img, link) {
+    if (successfulLoads < Number(document.getElementById("setnumber").value)) {
+        container.appendChild(img);
+        blockedUrls.add(link);
+        saveBlockedUrls();
+        successfulLoads++;
     }
 }
+
+async function classifyAndDisplayImages(images, links, desiredNum) {
+    if (successfulLoads >= desiredNum) {
+        return; // Stop processing if the desired number of images has been reached
+    }
+
+    try {
+        const srcs = images.map(img => img.src);
+        const classificationResults = await classifier(srcs);
+        classificationResults.forEach((result, index) => {
+            if (successfulLoads >= desiredNum) {
+                return; // Stop processing current batch if the desired number is reached
+            }
+
+            const classification = result.label.toLowerCase();
+            const selectedFilter = classificationSelector.value.toLowerCase();
+
+            console.log("Image is classified as:", classification);
+            if (selectedFilter === classification) {
+                displayImage(images[index], links[index]);
+            } else {
+                console.log("Image does not match filter, not displaying...");
+                // Ensuring that the loop continues to fetch and classify new images if the condition is not met
+                if (successfulLoads < desiredNum) {
+                    loadMedia(); // Fetch and process more images
+                }
+            }
+        });
+    } catch (error) {
+        console.error('Error during classification or image display:', error);
+        loadMedia(); // Continue processing in case of error
+    }
+}
+
 
 
 // Load previously used URLs from IndexedDB
