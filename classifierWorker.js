@@ -1,12 +1,13 @@
-// Assuming the library supports ESM, which needs confirmation or you might need a build step to convert it.
 import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.1';
 
+// Skip local check
 env.allowLocalModels = false;
 
 let classifier;
 
 async function loadModel() {
     classifier = await pipeline('image-classification', 'AdamCodd/vit-base-nsfw-detector');
+	postMessage({ modelLoaded: true }); // Notify that the model is loaded
 }
 
 loadModel();
