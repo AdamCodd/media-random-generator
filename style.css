@@ -1,9 +1,9 @@
 /* Base CSS */
-#header-container, #serviceSelector, h1 {
+#header-container, #serviceSelector, #classificationSelector, h1 {
     text-align: center;
 }
 
-#serviceSelector {
+#serviceSelector, #classificationSelector {
     padding: 0.1em 0.5em;
     font-size: 1em;
 }
@@ -27,7 +27,7 @@ img.imgur-image {
     cursor: pointer;
 }
 
-#reload, #setnumber {
+#load, #setnumber {
     padding: 0.1em 0.5em;
     font-size: 1em;
 }
@@ -52,7 +52,7 @@ img.imgur-image {
         margin-bottom: 10px;
     }
 
-    #serviceSelector, #reload, #setnumber {
+    #serviceSelector, #classificationSelector, #load, #setnumber {
         font-size: 0.8em;
         padding: 8px 16px;
     }
