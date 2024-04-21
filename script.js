@@ -192,7 +192,7 @@ function loadMedia(desiredNum) {
     let remainingLoads = desiredNum - successfulLoads;
     let batchSize;
     if (classificationSelector.value === "All") {
-        batchSize = Math.min(100, remainingLoads); // Increased batch size for 'All'
+        batchSize = Math.min(20, remainingLoads); // Increased batch size for 'All'
     } else {
         batchSize = Math.min(8, remainingLoads); // Default batch size for other classifications
     }    
