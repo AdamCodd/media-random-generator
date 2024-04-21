@@ -236,7 +236,7 @@ function processImage(link) {
                             URL.revokeObjectURL(imgUrl); // Ignore placeholder images
                             resolve('Ignored placeholder image.');
                         } else {
-                            if (classificationSelector.value === 'All') {
+                            if (classificationSelector.value === 'All' && successfulLoads < Number(setnumber.value)) {
                                 displayImage(imgUrl, link); // Directly display if 'All' is selected
                                 resolve('Displayed image without classification.');
                             } else {
