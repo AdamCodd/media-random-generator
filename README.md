@@ -12,9 +12,9 @@ You can select SFW/NSFW to display only those types of images from random Imgur 
 Because of the ES6 modules, if you want to run the script locally you'll need a server environment (npm/python HTTP server). The easiest way if you have python 3.x installed:
 ```
 cd media-random-generator
-python -m http.server 8000
+python -m http.server 8000 --bind 127.0.0.1
 ```
-Then open `http://localhost:8000` in your browser.
+Then open `http://127.0.0.1:8000` in your browser.
 
 ## Streamable generator
 Once you click on "reload," wait for a moment until you receive a functional URL; it will open a streamable stream in an iframe.
