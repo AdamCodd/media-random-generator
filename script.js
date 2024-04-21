@@ -190,8 +190,13 @@ function loadMedia(desiredNum) {
 
     // Dynamically adjust the batch size based on remaining items to load
     let remainingLoads = desiredNum - successfulLoads;
-    let batchSize = Math.min(8, remainingLoads);
-    
+    let batchSize;
+    if (classificationSelector.value === "All") {
+        batchSize = Math.min(20, remainingLoads); // Increased batch size for 'All'
+    } else {
+        batchSize = Math.min(8, remainingLoads); // Default batch size for other classifications
+    }    
+	
     const processBatch = () => {
         if (batchLinks.length === batchSize) {
 			loadingBatch = true; // Set loading flag
