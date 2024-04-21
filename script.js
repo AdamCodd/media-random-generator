@@ -1,7 +1,7 @@
 // Configuration
 const MAX = 500;
 const STREAMABLE_LIMIT = 5;
-const MAX_BLOCKED_URLS = 10000; // Maximum number of blocked URLs to store
+const MAX_BLOCKED_URLS = 3000; // Maximum number of blocked URLs to store
 
 // State variables
 const links = new Set();  
@@ -9,6 +9,7 @@ let blockedUrls = new Set();  // To store previously used URLs
 let successfulLoads = 0;
 let streamableCount = 0; 
 let modelLoaded = false; // To track if the WASM model is loaded
+let loadingBatch = false; // To prevent fetching another batch for the classifier while processing
 
 // DOM elements
 const container = document.getElementById("media-container");
@@ -36,7 +37,6 @@ if (indexedDBSupported) {
   };
   indexedDBOpenRequest.onsuccess = function(event) {
     db = event.target.result;
-    loadBlockedUrls();
   };
 } else {
   console.warn("IndexedDB is not supported in this browser. Using in-memory storage.");
@@ -70,44 +70,64 @@ function getLink() {
     }
 }
 
-function loadStreamable() {
-    if (streamableCount >= STREAMABLE_LIMIT) {  
-        return;
+function start() {
+    while (container.firstChild) {
+        container.removeChild(container.firstChild); // Clear previous content
     }
-  
+    links.clear(); // Clear the links for the new load
+	if (indexedDBSupported) {
+        loadBlockedUrls(); // Load blocked URLs at the start of the method
+    }
+    const numItems = Math.min(MAX, Number(document.getElementById("setnumber").value)); // Retrieve the desired number of images from the input
+    
+    if (serviceSelector.value === "streamable") {
+		streamableCount = 0; // Reset the counter for streamable
+		classificationSelector.disabled = true; // Disable classification selector
+        loadStreamables(numItems);
+    } else {
+		successfulLoads = 0; // Reset the counter for successful loads
+		classificationSelector.disabled = false; // Enable classification selector
+        loadMedia(numItems);
+    }
+	saveBlockedUrls();
+}
+
+async function loadStreamables(numItems) {
+    let loadedCount = 0;
+    while (loadedCount < numItems && loadedCount < STREAMABLE_LIMIT) {
+        await loadStreamable(); // Wait for each streamable to load before continuing
+        loadedCount++;
+    }
+}
+
+async function loadStreamable() {
     let randomCode = getStreamableLink().split("com/")[1];
     let randomUrl = `https://api.streamable.com/oembed.json?url=https://streamable.com/${randomCode}`;
-    
-    $.getJSON(randomUrl)
-    .done(function(data) {
+
+    try {
+        const data = await $.getJSON(randomUrl); // Using jQuery's getJSON method which returns a promise
         let iframe = document.createElement("iframe");
         iframe.src = `https://streamable.com/${randomCode}`;
         iframe.className = "streamable-video";
         iframe.style.width = "100vw";
         iframe.style.height = "50vh";
         container.appendChild(iframe);
-        streamableCount++;  
-    })
-    .fail(function(data) {
-        setTimeout(() => {
-            loadStreamable();
-        }, Math.floor(Math.random() * 100));
-    });
-}
-
-function start() {
-    container.textContent = ''; // Clear the container
-    streamableCount = 0; // Reset the counter for streamable
-    successfulLoads = 0; // Reset the counter for successful loads
-    const numItems = Math.min(MAX, Number(document.getElementById("setnumber").value)); // Retrieve the desired number of images from the input
-    for (let i = 0; i < numItems; i++) {
-        if (serviceSelector.value === "streamable") {
-            loadStreamable();
-        } else {
-            loadMedia();
-        }
+        blockedUrls.add(randomUrl);
+    } catch (error) {
+        await new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * 100))); // Exponential backoff or other retry logic could be added here
+        return loadStreamable(); // Recursive call to retry loading
     }
 }
+
+
+serviceSelector.addEventListener('change', function() {
+    // Disable classification selector if 'streamable' is selected
+    if (serviceSelector.value === "streamable") {
+        classificationSelector.disabled = true;
+    } else {
+        classificationSelector.disabled = false;
+    }
+});
 
 reload.addEventListener('click', start); // Optimized to directly use the 'start' function
 
@@ -150,84 +170,93 @@ classifierWorker.onmessage = function(e) {
             displayImage(batchLinks[index].img, url);
         } else {
             console.log("Image does not match filter, not displaying...");
-            loadMedia(); // Fetch and process more images
+        }
+		if (index === batchLinks.length - 1) {
+            loadingBatch = false; // Reset loading flag after last batch item is processed
+            if (successfulLoads < Number(setnumber.value)) {
+                loadMedia(Number(setnumber.value)); // Continue loading if not reached desired count
+            }
         }
     });
-    if (successfulLoads < Number(setnumber.value)) {
-        loadMedia(); // Continue loading media if not reached the desired number
-    }
 };
 
-function loadMedia() {
-    const desiredNum = Number(document.getElementById("setnumber").value);
+let batchLinks = []; // Holds the current batch of links to process
+
+function loadMedia(desiredNum) {
     if (successfulLoads >= desiredNum) {
-        return; // All desired images are already processed
+        console.log("Desired number of media loaded.");
+        return;
     }
 
-    let counterBatch = 0;
-    let batchSize = 4;
-    let batchLinks = [];
-    let imagePromises = [];
-
+    // Dynamically adjust the batch size based on remaining items to load
+    let remainingLoads = desiredNum - successfulLoads;
+    let batchSize = Math.min(8, remainingLoads);
+    
     const processBatch = () => {
-        if (batchLinks.length > 0 && successfulLoads < desiredNum) {
+        if (batchLinks.length === batchSize) {
+			loadingBatch = true; // Set loading flag
             classifierWorker.postMessage({ links: batchLinks, classificationType: classificationSelector.value });
-            batchLinks = [];
-            counterBatch = 0;
+            batchLinks = []; // Clear the batch links after sending them to the classifier
+        }
+
+        // Load more media if not yet reached the desired number
+        if (successfulLoads < desiredNum && !loadingBatch) {
+            loadMoreMedia(desiredNum); // Continue loading media
         }
     };
 
-    const processImage = (link) => {
-        return new Promise((resolve, reject) => {
-            if (!links.has(link) && !blockedUrls.has(link)) {
-                links.add(link);
-                fetch(link)
-                    .then(res => res.ok ? res.blob() : Promise.reject('Failed to load image'))
-                    .then(blob => {
-                        const imgUrl = URL.createObjectURL(blob);
-                        const img = new Image();
-                        img.src = imgUrl;
-                        img.onload = () => {
-                            if (img.naturalWidth === 161 && img.naturalHeight === 81 || successfulLoads >= desiredNum) {
-                                URL.revokeObjectURL(imgUrl); // Handle placeholder or max load
-                                resolve('Not processing, retrying or stopping...');
-                                if (successfulLoads < desiredNum) loadMedia();
-                            } else if (classificationSelector.value === 'All') {
-                                displayImage(imgUrl, link); // Direct display without classification
-                                resolve('Image displayed without classification.');
-                            } else {
-                                batchLinks.push({ img: imgUrl, link: link });
-                                counterBatch++;
-                                if (counterBatch >= batchSize) processBatch();
-                                resolve('Image loaded and batched for classification.');
-                            }
-                        };
-                        img.onerror = () => {
-                            URL.revokeObjectURL(imgUrl);
-                            console.error('Image failed to load.');
-                            resolve('Image load error, retrying...');
-                            loadMedia();
-                        };
-                    })
-                    .catch(error => {
-                        console.error(error);
-                        blockedUrls.add(link);
-                        saveBlockedUrls();
-                        resolve('Fetch error, retrying...');
-                        loadMedia();
-                    });
-            } else {
-                resolve('Duplicate link, skipping...');
+    // Function to initiate more loads if necessary
+    const loadMoreMedia = (desiredNum) => {
+        if (successfulLoads < desiredNum && !loadingBatch) {
+            let promises = [];
+            for (let i = 0; i < Math.min(remainingLoads, batchSize); i++) {
+                promises.push(processImage(getLink()));
             }
-        });
+            Promise.all(promises).then(processBatch); // Process the batch once all current promises resolve
+        }
     };
-
-    for (let i = 0; i < Math.min(desiredNum - successfulLoads, batchSize); i++) {
-        imagePromises.push(processImage(getLink()));
+    // Immediately initiate loading if not currently processing a batch
+    if (!loadingBatch) {
+        loadMoreMedia(desiredNum);
     }
+}
 
-    Promise.all(imagePromises).then(() => {
-        if (successfulLoads < desiredNum) processBatch();
+function processImage(link) {
+    return new Promise((resolve, reject) => {
+        if (!links.has(link)) {
+            links.add(link);
+            fetch(link)
+                .then(res => res.ok ? res.blob() : Promise.reject('Failed to load image'))
+                .then(blob => {
+                    const imgUrl = URL.createObjectURL(blob);
+                    const img = new Image();
+                    img.src = imgUrl;
+                    img.onload = () => {
+                        if (img.naturalWidth === 161 && img.naturalHeight === 81) {
+                            URL.revokeObjectURL(imgUrl); // Ignore placeholder images
+                            resolve('Ignored placeholder image.');
+                        } else {
+                            if (classificationSelector.value === 'All') {
+                                displayImage(imgUrl, link); // Directly display if 'All' is selected
+                                resolve('Displayed image without classification.');
+                            } else {
+                                batchLinks.push({ img: imgUrl, link: link }); // Add to batch for classification
+                                resolve('Image loaded and added to batch.');
+                            }
+                        }
+                    };
+                    img.onerror = () => {
+                        URL.revokeObjectURL(imgUrl);
+                        reject('Image load error, retrying...');
+                    };
+                })
+                .catch(error => {
+                    console.log(error);
+                    resolve('Fetch error, retrying...');
+                });
+        } else {
+            resolve('Duplicate link, skipping...');
+        }
     });
 }
 
@@ -242,18 +271,22 @@ function displayImage(imgUrl, link) {
 
     // Append the image to the DOM and update the application state
     container.appendChild(img); 
-    blockedUrls.add(link); 
-    saveBlockedUrls(); 
-
     successfulLoads++;
+	
+	// Extract the unique code from the Imgur URL to store in blockedUrls
+    const urlParts = link.match(/imgur\.com\/(.+)\.jpg/);
+    if (urlParts && urlParts[1]) {
+        blockedUrls.add(urlParts[1]); // Add the code only, not the full URL
+    }
 
+    // Free up the blob URL memory
     URL.revokeObjectURL(imgUrl);
 }
 
 
 // Load previously used URLs from IndexedDB
 async function loadBlockedUrls() {
-  if (!db) return; // Skip if IndexedDB is not initialized
+  if (!db || blockedUrls.size == 0) return; // Skip if IndexedDB is not initialized or blockedUrls is empty
   return new Promise((resolve, reject) => {
     const transaction = db.transaction("blockedUrls", "readonly");
     const objectStore = transaction.objectStore("blockedUrls");
@@ -276,24 +309,36 @@ async function loadBlockedUrls() {
 
 // Save used URLs to IndexedDB, ensuring the count doesn't exceed the set limit
 function saveBlockedUrls() {
-  if (!db || blockedUrls.size <= MAX_BLOCKED_URLS) return;  // Skip if IndexedDB is not initialized or no new URLs
+  if (!db || blockedUrls.size <= MAX_BLOCKED_URLS) return; // Only proceed if necessary
+
   const transaction = db.transaction("blockedUrls", "readwrite");
   const objectStore = transaction.objectStore("blockedUrls");
 
-  // Only store the latest MAX_BLOCKED_URLS entries
-  const urlsToStore = Array.from(blockedUrls).slice(-MAX_BLOCKED_URLS);
-  urlsToStore.forEach(url => {
+  // Clean up old entries if necessary
+  while (blockedUrls.size > MAX_BLOCKED_URLS) {
+    const firstItem = blockedUrls.values().next().value;
+    blockedUrls.delete(firstItem); // Remove the oldest item
+    objectStore.delete(firstItem); // Reflect this in IndexedDB
+  }
+
+  // Store new URLs
+  blockedUrls.forEach(url => {
     objectStore.put({ url });
   });
+
+  transaction.oncomplete = function() {
+    console.log("Blocked URLs updated in IndexedDB.");
+  };
 
   transaction.onerror = function(event) {
     console.error("Transaction error in saving blocked URLs:", transaction.error);
   };
 }
 
+
 // Event listener to update button status based on classification selector changes
 function updateLoadButtonStatus() {
-    if ((classificationSelector.value.toLowerCase() === "sfw" || classificationSelector.value.toLowerCase() === "nsfw") && !modelLoaded) {
+    if ((classificationSelector.value.toLowerCase() !== "All") && !modelLoaded) {
         reload.disabled = true;
         console.log("Waiting for model to load before enabling 'Load' button for SFW/NSFW classification.");
     } else {
