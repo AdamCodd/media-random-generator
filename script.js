@@ -209,7 +209,7 @@ function loadMedia(desiredNum) {
     const loadMoreMedia = (desiredNum) => {
         if (successfulLoads < desiredNum && !loadingBatch) {
             let promises = [];
-            for (let i = 0; i < Math.min(remainingLoads, batchSize); i++) {
+            for (let i = 0; i < Math.min(remainingLoads, batchSize - batchLinks.length); i++) {
                 promises.push(processImage(getLink()));
             }
             Promise.all(promises).then(processBatch); // Process the batch once all current promises resolve
@@ -334,7 +334,6 @@ function saveBlockedUrls() {
     console.error("Transaction error in saving blocked URLs:", transaction.error);
   };
 }
-
 
 // Event listener to update button status based on classification selector changes
 function updateLoadButtonStatus() {
