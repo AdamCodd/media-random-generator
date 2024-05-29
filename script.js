@@ -157,9 +157,9 @@ classifierWorker.onmessage = function(e) {
             return;
         }
 
-        const result = resultArray[0]; // Assuming the first item is the relevant classification
+        const result = resultArray[0]; // the first item is the relevant classification
         const classification = result.label.toLowerCase();
-        const score = result.score; // Assuming the score is also provided
+        const score = result.score; // the score is also provided
         const url = batchLinks[index].link; // The URL associated with this classification
 
         // Log the classification, score, and URL to the console
@@ -278,7 +278,7 @@ function displayImage(imgUrl, link) {
     container.appendChild(img); 
     successfulLoads++;
 	
-	// Extract the unique code from the Imgur URL to store in blockedUrls
+    // Extract the unique code from the Imgur URL to store in blockedUrls
     const urlParts = link.match(/imgur\.com\/(.+)\.jpg/);
     if (urlParts && urlParts[1]) {
         blockedUrls.add(urlParts[1]); // Add the code only, not the full URL
