@@ -39,7 +39,7 @@ async function loadModel() {
         
         classifier = await pipeline('image-classification', 'AdamCodd/vit-base-nsfw-detector', {
             device: webGPUSupported ? 'webgpu' : 'wasm',
-            dtype: webGPUSupported ? 'fp32' : 'q4f16'
+            dtype: webGPUSupported ? 'fp32' : 'q8'
         });
         
         postMessage({ 
