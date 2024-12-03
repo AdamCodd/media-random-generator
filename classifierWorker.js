@@ -1,13 +1,58 @@
-import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.1';
+import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@latest';
 
 // Skip local check
 env.allowLocalModels = false;
 
 let classifier;
 
+async function checkWebGPUSupport() {
+    try {
+        const gpu = self.navigator?.gpu;
+        if (!gpu) {
+            console.log('WebGPU is not supported in this browser - falling back to WASM');
+            return false;
+        }
+        
+        const adapter = await gpu.requestAdapter();
+        if (!adapter) {
+            console.log('Failed to get WebGPU adapter - falling back to WASM');
+            return false;
+        }
+        
+        const device = await adapter.requestDevice();
+        if (device) {
+            console.log('WebGPU is supported and initialized successfully!');
+            return true;
+        } else {
+            console.log('Failed to initialize WebGPU device - falling back to WASM');
+            return false;
+        }
+    } catch (e) {
+        console.log('Error while checking WebGPU support - falling back to WASM:', e);
+        return false;
+    }
+}
+
 async function loadModel() {
-    classifier = await pipeline('image-classification', 'AdamCodd/vit-base-nsfw-detector');
-	postMessage({ modelLoaded: true }); // Notify that the model is loaded
+    try {
+        const webGPUSupported = await checkWebGPUSupport();
+        
+        classifier = await pipeline('image-classification', 'AdamCodd/vit-base-nsfw-detector', {
+            device: webGPUSupported ? 'webgpu' : 'wasm',
+            dtype: webGPUSupported ? 'fp32' : 'q4'
+        });
+        
+        postMessage({ 
+            modelLoaded: true,
+            usingWebGPU: webGPUSupported 
+        });
+    } catch (error) {
+        postMessage({ 
+            modelLoaded: false, 
+            error: 'Failed to load model',
+            details: error 
+        });
+    }
 }
 
 loadModel();
@@ -16,7 +61,7 @@ onmessage = async function(e) {
     const { links, classificationType } = e.data;
     try {
         const results = await Promise.all(links.map(async ({ img, link }) => {
-            return await classifier(img); // Ensure correct usage based on actual API calls
+            return await classifier(img);
         }));
         postMessage({ results, batchLinks: links });
     } catch (error) {
