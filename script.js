@@ -137,6 +137,11 @@ const classifierWorker = new Worker('classifierWorker.js', { type: 'module' });
 classifierWorker.onmessage = function(e) {
     if (e.data.error) {
         console.error('Classification error:', e.data.details);
+        // Instead of returning, continue processing other images
+        loadingBatch = false;
+        if (successfulLoads < Number(setnumber.value)) {
+            loadMedia(Number(setnumber.value));
+        }
         return;
     }
 
@@ -151,9 +156,10 @@ classifierWorker.onmessage = function(e) {
     results.forEach((resultArray, index) => {
         if (successfulLoads >= Number(setnumber.value)) return; // Check load limit
 
-        // Ensure the resultArray is not empty and has a label
-        if (!resultArray.length || !resultArray[0].label) {
-            console.error("No valid label in result:", resultArray);
+        // Handle cases where classification failed for a specific image
+        if (!resultArray || !resultArray.length || !resultArray[0].label) {
+            console.warn("Skipping invalid classification result for:", batchLinks[index].link);
+            URL.revokeObjectURL(batchLinks[index].img); // Clean up the blob URL
             return;
         }
 
@@ -170,8 +176,9 @@ classifierWorker.onmessage = function(e) {
             displayImage(batchLinks[index].img, url);
         } else {
             console.log("Image does not match filter, not displaying...");
+            URL.revokeObjectURL(batchLinks[index].img); // Clean up the blob URL
         }
-		if (index === batchLinks.length - 1) {
+        if (index === batchLinks.length - 1) {
             loadingBatch = false; // Reset loading flag after last batch item is processed
             if (successfulLoads < Number(setnumber.value)) {
                 loadMedia(Number(setnumber.value)); // Continue loading if not reached desired count
@@ -237,27 +244,33 @@ function processImage(link) {
                     const img = new Image();
                     img.src = imgUrl;
                     img.onload = () => {
-                        if (img.naturalWidth === 161 && img.naturalHeight === 81) {
-                            URL.revokeObjectURL(imgUrl); // Ignore placeholder images
-                            resolve('Ignored placeholder image.');
-                        } else {
-                            if (classificationSelector.value === 'All' && successfulLoads < Number(setnumber.value)) {
-                                displayImage(imgUrl, link); // Directly display if 'All' is selected
-                                resolve('Displayed image without classification.');
+                        try {
+                            if (img.naturalWidth === 161 && img.naturalHeight === 81) {
+                                URL.revokeObjectURL(imgUrl); // Ignore placeholder images
+                                resolve('Ignored placeholder image.');
                             } else {
-                                batchLinks.push({ img: imgUrl, link: link }); // Add to batch for classification
-                                resolve('Image loaded and added to batch.');
+                                if (classificationSelector.value === 'All' && successfulLoads < Number(setnumber.value)) {
+                                    displayImage(imgUrl, link); // Directly display if 'All' is selected
+                                    resolve('Displayed image without classification.');
+                                } else {
+                                    batchLinks.push({ img: imgUrl, link: link }); // Add to batch for classification
+                                    resolve('Image loaded and added to batch.');
+                                }
                             }
+                        } catch (error) {
+                            console.warn('Error processing image:', error);
+                            URL.revokeObjectURL(imgUrl);
+                            resolve('Error processing image, skipping...');
                         }
                     };
                     img.onerror = () => {
                         URL.revokeObjectURL(imgUrl);
-                        reject('Image load error, retrying...');
+                        resolve('Image load error, skipping...');
                     };
                 })
                 .catch(error => {
-                    console.log(error);
-                    resolve('Fetch error, retrying...');
+                    console.warn('Fetch error:', error);
+                    resolve('Fetch error, skipping...');
                 });
         } else {
             resolve('Duplicate link, skipping...');
