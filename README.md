@@ -3,7 +3,12 @@ This is a simple JS script that can efficiently retrieve a random image from Img
 You can test it here: [https://adamcodd.github.io/media-random-generator](https://adamcodd.github.io/media-random-generator/)
 
 ## WebGPU Support
-Added a new experimental webGPU support (fallback to WASM if it's not supported) it's way faster than WASM, but currently can't process more than 1 image at a time.
+I added a new experimental webGPU support (fallback to WASM if it's not supported). It's way faster than WASM, but might take a little while to load depending on your network.
+
+As of December 2024, global WebGPU support is around 72% (according to [caniuse.com](https://caniuse.com/webgpu)), meaning some users may not be able to use the WebGPU API. You may need to enable it using a feature flag:
+* Firefox: with the dom.webgpu.enabled flag ([see here](https://developer.mozilla.org/en-US/docs/Mozilla/Firefox/Experimental_features#:~:text=tested%20by%20Firefox.-,WebGPU%20API,-The%20WebGPU%20API)).
+* Safari: with the WebGPU feature flag ([see here](https://webkit.org/blog/14879/webgpu-now-available-for-testing-in-safari-technology-preview/)).
+* Older Chromium browsers (on Windows, macOS, Linux): with the enable-unsafe-webgpu flag ([see here](https://developer.chrome.com/docs/web-platform/webgpu/troubleshooting-tips)).
 
 ## Imgur generator
 Click on the image to view the full size version.\
