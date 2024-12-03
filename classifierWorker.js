@@ -33,9 +33,12 @@ async function checkWebGPUSupport() {
     }
 }
 
+let isUsingWebGPU = false;
+
 async function loadModel() {
     try {
         const webGPUSupported = await checkWebGPUSupport();
+        isUsingWebGPU = webGPUSupported;
         
         classifier = await pipeline('image-classification', 'AdamCodd/vit-base-nsfw-detector', {
             device: webGPUSupported ? 'webgpu' : 'wasm',
@@ -57,12 +60,26 @@ async function loadModel() {
 
 loadModel();
 
+
 onmessage = async function(e) {
     const { links, classificationType } = e.data;
     try {
-        const results = await Promise.all(links.map(async ({ img, link }) => {
-            return await classifier(img);
-        }));
+        let results;
+        
+        if (isUsingWebGPU) {
+            // Sequential processing for WebGPU
+            results = [];
+            for (const { img, link } of links) {
+                const result = await classifier(img);
+                results.push(result);
+            }
+        } else {
+            // Parallel processing for WASM
+            results = await Promise.all(links.map(async ({ img, link }) => {
+                return await classifier(img);
+            }));
+        }
+        
         postMessage({ results, batchLinks: links });
     } catch (error) {
         postMessage({ error: 'Failed to classify images', details: error });
