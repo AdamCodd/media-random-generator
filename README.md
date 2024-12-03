@@ -1,6 +1,10 @@
 # Media random generator
 This is a simple JS script that can efficiently retrieve a random image from Imgur (up to 500) or random Streamable videos (up to 5), using IndexedDB to avoid displaying duplicates.\
 You can test it here: [https://adamcodd.github.io/media-random-generator](https://adamcodd.github.io/media-random-generator/)
+
+## WebGPU Support
+Added a new experimental webGPU support (fallback to WASM if it's not supported) it's way faster than WASM, but currently can't process more than 1 image at a time.
+
 ## Imgur generator
 Click on the image to view the full size version.\
 <b>Warning</b>: Some images might be NSFW. All content displayed here belongs to its respective authors.
