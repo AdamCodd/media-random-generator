@@ -2,6 +2,8 @@
 This is a simple JS script that can efficiently retrieve a random image from Imgur (up to 500) or random Streamable videos (up to 5), using IndexedDB to avoid displaying duplicates. Later I added a ViT classifier model to test a NSFW filter in browser.\
 You can test it here: [https://adamcodd.github.io/media-random-generator](https://adamcodd.github.io/media-random-generator/)
 
+**[31/08]** I’ve added a confidence cutoff. This will help you better understand the false positives and false negatives you might encounter at different cutoff values when working with real-world images.
+
 ## WebGPU Support
 I added a new experimental webGPU support (fallback to WASM if it's not supported). It's way faster than WASM, but might take a little while to load depending on your network.
 
