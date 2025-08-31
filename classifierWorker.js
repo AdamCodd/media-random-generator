@@ -1,9 +1,11 @@
+// classifierWorker.js
 import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@latest';
 
 // Skip local check
 env.allowLocalModels = false;
 
 let classifier;
+let classifierBatchSize = 1;
 
 async function checkWebGPUSupport() {
     try {
@@ -33,17 +35,36 @@ async function checkWebGPUSupport() {
     }
 }
 
-let isUsingWebGPU = false;
-
 async function loadModel() {
     try {
         const webGPUSupported = await checkWebGPUSupport();
-        isUsingWebGPU = webGPUSupported;
-        
-        classifier = await pipeline('image-classification', 'AdamCodd/vit-base-nsfw-detector', {
-            device: webGPUSupported ? 'webgpu' : 'wasm',
-            dtype: webGPUSupported ? 'fp32' : 'q8'
-        });
+        // Try using fp16 on WebGPU for speed; fall back to fp32 on error.
+        if (webGPUSupported) {
+            try {
+                classifier = await pipeline('image-classification', 'AdamCodd/vit-base-nsfw-detector', {
+                    device: 'webgpu',
+                    dtype: 'fp16' // faster on GPUs that support it
+                });
+                classifierBatchSize = 8; // batch multiple images for better GPU utilization
+                console.log('Loaded model on WebGPU with fp16.');
+            } catch (errFp16) {
+                console.warn('fp16 load failed, retrying with fp32:', errFp16);
+                classifier = await pipeline('image-classification', 'AdamCodd/vit-base-nsfw-detector', {
+                    device: 'webgpu',
+                    dtype: 'fp32'
+                });
+                classifierBatchSize = 4;
+                console.log('Loaded model on WebGPU with fp32.');
+            }
+        } else {
+            // WASM: use quantized dtype for smaller memory and speed
+            classifier = await pipeline('image-classification', 'AdamCodd/vit-base-nsfw-detector', {
+                device: 'wasm',
+                dtype: 'q8'
+            });
+            classifierBatchSize = 1; // keep small for WASM (adjust if you test and find a better value)
+            console.log('Loaded model on WASM with q8.');
+        }
         
         postMessage({ 
             modelLoaded: true,
@@ -53,35 +74,72 @@ async function loadModel() {
         postMessage({ 
             modelLoaded: false, 
             error: 'Failed to load model',
-            details: error 
+            details: String(error) 
         });
     }
 }
 
 loadModel();
 
+// helper: split array into chunks
+function chunkArray(arr, size) {
+    const out = [];
+    for (let i = 0; i < arr.length; i += size) {
+        out.push(arr.slice(i, i + size));
+    }
+    return out;
+}
 
 onmessage = async function(e) {
-    const { links, classificationType } = e.data;
+    // Expect links: [{ img: <URL string>, link: <original link>, blobUrl: <blobUrl for later display>, buffer: <ArrayBuffer?> }, ...]
+    const { links, classificationType, confidenceCutoff } = e.data;
     try {
-        let results;
-        
-        if (isUsingWebGPU) {
-            // Sequential processing for WebGPU
-            results = [];
-            for (const { img, link } of links) {
-                const result = await classifier(img);
-                results.push(result);
-            }
-        } else {
-            // Parallel processing for WASM
-            results = await Promise.all(links.map(async ({ img, link }) => {
-                return await classifier(img);
-            }));
+        if (!classifier) {
+            throw new Error('Classifier not initialized yet');
         }
-        
-        postMessage({ results, batchLinks: links });
+
+        // Build inputs for the classifier. If caller provided binary buffers, use them (create a temporary objectURL from buffer),
+        // otherwise fall back to the supplied remote URL.
+        const tempObjectUrls = []; // collect for later revocation
+        const inputs = links.map(l => {
+            // If caller passed an ArrayBuffer, create a Blob and an objectURL so pipeline doesn't need to re-download.
+            if (l && l.buffer) {
+                try {
+                    // assume image/jpeg by default; if content type is unknown this still works in many cases.
+                    const blob = new Blob([l.buffer], { type: 'image/jpeg' });
+                    const objUrl = URL.createObjectURL(blob);
+                    tempObjectUrls.push(objUrl);
+                    return objUrl;
+                } catch (err) {
+                    // fallback to URL
+                    console.warn('Failed to create objectURL from buffer, falling back to URL:', err);
+                    return (typeof l.img === 'string') ? l.img : l.link;
+                }
+            } else {
+                return (typeof l.img === 'string') ? l.img : l.link;
+            }
+        });
+
+        // Run inference in batches (classifierBatchSize set during model load)
+        let results = [];
+        const urlBatches = chunkArray(inputs, classifierBatchSize);
+        for (const batchInput of urlBatches) {
+            // classifier accepts an array of image URLs / sources and returns array of outputs.
+            const batchResults = await classifier(batchInput, { batch_size: classifierBatchSize });
+            results.push(...batchResults);
+            // yield to the event loop briefly
+            await Promise.resolve();
+        }
+
+        // Revoke temporary object URLs created from transferred buffers
+        for (const u of tempObjectUrls) {
+            try { URL.revokeObjectURL(u); } catch (e) {}
+        }
+
+        // Return raw results to the main thread (main thread applies filtering/score logic).
+        postMessage({ results: results });
+
     } catch (error) {
-        postMessage({ error: 'Failed to classify images', details: error });
+        postMessage({ error: 'Failed to classify images', details: String(error) });
     }
 };
