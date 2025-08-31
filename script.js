@@ -1,15 +1,19 @@
+// script.js
+
 // Configuration
 const MAX = 500;
 const STREAMABLE_LIMIT = 5;
 const MAX_BLOCKED_URLS = 3000; // Maximum number of blocked URLs to store
+const MAX_STREAMABLE_RETRIES = 3; // avoid infinite recursion
 
 // State variables
 const links = new Set();  
 let blockedUrls = new Set();  // To store previously used URLs
 let successfulLoads = 0;
 let streamableCount = 0; 
-let modelLoaded = false; // To track if the WASM model is loaded
+let modelLoaded = false; // To track if the WASM/WebGPU model is loaded
 let loadingBatch = false; // To prevent fetching another batch for the classifier while processing
+let confidenceCutoff = 0.75; 
 
 // DOM elements
 const container = document.getElementById("media-container");
@@ -17,6 +21,7 @@ const reload = document.getElementById("load");
 const setnumber = document.getElementById("setnumber");
 const serviceSelector = document.getElementById("serviceSelector");
 const classificationSelector = document.getElementById("classificationSelector");
+const confidenceNumber = document.getElementById('confidenceCutoffNumber');
 
 const characters = "abcdefgihjklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
 
@@ -42,9 +47,27 @@ if (indexedDBSupported) {
   console.warn("IndexedDB is not supported in this browser. Using in-memory storage.");
 }
 
+if (confidenceNumber) {
+    // read initial value from DOM and clamp between 0 and 1
+    const initial = Number(confidenceNumber.value);
+    if (!Number.isNaN(initial)) {
+        confidenceCutoff = Math.max(0, Math.min(1, initial));
+        confidenceNumber.value = confidenceCutoff;
+    }
+
+    confidenceNumber.addEventListener('input', (ev) => {
+        let parsed = Number(ev.target.value);
+        if (Number.isNaN(parsed)) parsed = 0.9;
+        parsed = Math.max(0, Math.min(1, parsed));
+        confidenceCutoff = parsed;
+        confidenceNumber.value = parsed;
+    });
+}
+
 function getImgurLink() {
     let code = '';
     do {
+        code = '';
         for (let i = 0; i < 5; i++) {
             code += characters[Math.floor(Math.random() * characters.length)];
         }
@@ -75,21 +98,21 @@ function start() {
         container.removeChild(container.firstChild); // Clear previous content
     }
     links.clear(); // Clear the links for the new load
-	if (indexedDBSupported) {
+    if (indexedDBSupported) {
+        // It's async — we don't block on it, just let it hydrate in the background
         loadBlockedUrls(); // Load blocked URLs at the start of the method
     }
     const numItems = Math.min(MAX, Number(document.getElementById("setnumber").value)); // Retrieve the desired number of images from the input
     
     if (serviceSelector.value === "streamable") {
-		streamableCount = 0; // Reset the counter for streamable
-		classificationSelector.disabled = true; // Disable classification selector
+        streamableCount = 0; // Reset the counter for streamable
+        classificationSelector.disabled = true; // Disable classification selector
         loadStreamables(numItems);
     } else {
-		successfulLoads = 0; // Reset the counter for successful loads
-		classificationSelector.disabled = false; // Enable classification selector
+        successfulLoads = 0; // Reset the counter for successful loads
+        classificationSelector.disabled = false; // Enable classification selector
         loadMedia(numItems);
     }
-	saveBlockedUrls();
 }
 
 async function loadStreamables(numItems) {
@@ -100,7 +123,7 @@ async function loadStreamables(numItems) {
     }
 }
 
-async function loadStreamable() {
+async function loadStreamable(retries = 0) {
     let randomCode = getStreamableLink().split("com/")[1];
     let randomUrl = `https://api.streamable.com/oembed.json?url=https://streamable.com/${randomCode}`;
 
@@ -114,11 +137,14 @@ async function loadStreamable() {
         container.appendChild(iframe);
         blockedUrls.add(randomUrl);
     } catch (error) {
-        await new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * 100))); // Exponential backoff or other retry logic could be added here
-        return loadStreamable(); // Recursive call to retry loading
+        if (retries >= MAX_STREAMABLE_RETRIES) {
+            console.warn('Max retries reached for streamable:', randomUrl);
+            return;
+        }
+        await new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * 100) + 50));
+        return loadStreamable(retries + 1); // Retry with a cap
     }
 }
-
 
 serviceSelector.addEventListener('change', function() {
     // Disable classification selector if 'streamable' is selected
@@ -134,10 +160,12 @@ reload.addEventListener('click', start); // Optimized to directly use the 'start
 // Initialize web worker for classification
 const classifierWorker = new Worker('classifierWorker.js', { type: 'module' });
 
+// Holds the *exact* batch we just sent to the worker so we can map results back to blobUrls/links
+let inflightBatchLinks = [];
+
 classifierWorker.onmessage = function(e) {
     if (e.data.error) {
         console.error('Classification error:', e.data.details);
-        // Instead of returning, continue processing other images
         loadingBatch = false;
         if (successfulLoads < Number(setnumber.value)) {
             loadMedia(Number(setnumber.value));
@@ -152,33 +180,72 @@ classifierWorker.onmessage = function(e) {
         return;
     }
 
-    const { results, batchLinks } = e.data;
+    const { results } = e.data;
+    const currentBatch = inflightBatchLinks; // use our snapshot (DON'T rely on a returned batchLinks)
+
+    // results is an array with one result-array per input image (pipeline output).
+    // currentBatch is the same-length array of { link, blobUrl } captured before posting.
+
     results.forEach((resultArray, index) => {
         if (successfulLoads >= Number(setnumber.value)) return; // Check load limit
 
-        // Handle cases where classification failed for a specific image
+        const batchItem = currentBatch?.[index];
+
+        // If the pipeline returned nothing usable for this image, drop it.
         if (!resultArray || !resultArray.length || !resultArray[0].label) {
-            console.warn("Skipping invalid classification result for:", batchLinks[index].link);
-            URL.revokeObjectURL(batchLinks[index].img); // Clean up the blob URL
+            if (batchItem?.blobUrl) {
+                URL.revokeObjectURL(batchItem.blobUrl);
+            }
+            if (index === currentBatch.length - 1) {
+                loadingBatch = false;
+                if (successfulLoads < Number(setnumber.value)) {
+                    loadMedia(Number(setnumber.value));
+                }
+            }
             return;
         }
 
-        const result = resultArray[0]; // the first item is the relevant classification
-        const classification = result.label.toLowerCase();
-        const score = result.score; // the score is also provided
-        const url = batchLinks[index].link; // The URL associated with this classification
+        const topResult = resultArray[0];
+        const classification = String(topResult.label).toLowerCase();
+        const score = Number(topResult.score ?? 0);
 
-        // Log the classification, score, and URL to the console
-        console.log(`Classification: ${classification}, Score: ${score.toFixed(2)}, URL: ${url}`);
-
+        // FIRST: check the label filter (must match before we even consider the score)
         const selectedFilter = classificationSelector.value.toLowerCase();
-        if (selectedFilter === classification) {
-            displayImage(batchLinks[index].img, url);
-        } else {
-            console.log("Image does not match filter, not displaying...");
-            URL.revokeObjectURL(batchLinks[index].img); // Clean up the blob URL
+
+        if (selectedFilter !== "all" && selectedFilter !== classification) {
+            if (batchItem?.blobUrl) URL.revokeObjectURL(batchItem.blobUrl);
+            console.log(`Skipped label ${classification} with confidence ${score.toFixed(2)}: ${batchItem?.link}`);
+            if (index === currentBatch.length - 1) {
+                loadingBatch = false;
+                if (successfulLoads < Number(setnumber.value)) {
+                    loadMedia(Number(setnumber.value));
+                }
+            }
+            return;
         }
-        if (index === batchLinks.length - 1) {
+
+        // SECOND: since label matched (or user selected "All"), apply confidence cutoff
+        if (score < confidenceCutoff) {
+            if (batchItem?.blobUrl) URL.revokeObjectURL(batchItem.blobUrl);
+            console.log(`Skipped due to low confidence (${score.toFixed(2)} < ${confidenceCutoff.toFixed(2)}):`, batchItem?.link);
+            if (index === currentBatch.length - 1) {
+                loadingBatch = false;
+                if (successfulLoads < Number(setnumber.value)) {
+                    loadMedia(Number(setnumber.value));
+                }
+            }
+            return;
+        }
+
+        // Both checks passed -> display
+        if (batchItem?.blobUrl && batchItem?.link) {
+            displayImage(batchItem.blobUrl, batchItem.link);
+            console.log(`Displayed (label=${classification}, score=${score.toFixed(2)}): ${batchItem.link}`);
+        } else {
+            console.warn('No blobUrl to display for item:', batchItem);
+        }
+
+        if (index === currentBatch.length - 1) {
             loadingBatch = false; // Reset loading flag after last batch item is processed
             if (successfulLoads < Number(setnumber.value)) {
                 loadMedia(Number(setnumber.value)); // Continue loading if not reached desired count
@@ -203,11 +270,25 @@ function loadMedia(desiredNum) {
     } else {
         batchSize = Math.min(8, remainingLoads); // Default batch size for other classifications
     }    
-	
+
     const processBatch = () => {
         if (batchLinks.length === batchSize) {
-			loadingBatch = true; // Set loading flag
-            classifierWorker.postMessage({ links: batchLinks, classificationType: classificationSelector.value });
+            loadingBatch = true; // Set loading flag
+
+            // Snapshot the batch so we can map results back to blobUrls/links later
+            inflightBatchLinks = batchLinks.slice();
+
+            // transfer buffers to avoid copying
+            const transferList = inflightBatchLinks.map(l => l.buffer).filter(Boolean);
+
+            // Send the batch to the worker.
+            classifierWorker.postMessage({ 
+                links: inflightBatchLinks, 
+                classificationType: classificationSelector.value,
+                confidenceCutoff: confidenceCutoff 
+            }, transferList);
+
+            // NOTE: transferred arrayBuffers are now neutered in main thread; but we still keep blobUrl for display AND link for mapping
             batchLinks = []; // Clear the batch links after sending them to the classifier
         }
 
@@ -239,12 +320,13 @@ function processImage(link) {
             links.add(link);
             fetch(link)
                 .then(res => res.ok ? res.blob() : Promise.reject('Failed to load image'))
-                .then(blob => {
+                .then(async blob => {
                     const imgUrl = URL.createObjectURL(blob);
                     const img = new Image();
                     img.src = imgUrl;
-                    img.onload = () => {
+                    img.onload = async () => {
                         try {
+                            // Use naturalWidth/naturalHeight to detect placeholders (same as original logic)
                             if (img.naturalWidth === 161 && img.naturalHeight === 81) {
                                 URL.revokeObjectURL(imgUrl); // Ignore placeholder images
                                 resolve('Ignored placeholder image.');
@@ -253,8 +335,18 @@ function processImage(link) {
                                     displayImage(imgUrl, link); // Directly display if 'All' is selected
                                     resolve('Displayed image without classification.');
                                 } else {
-                                    batchLinks.push({ img: imgUrl, link: link }); // Add to batch for classification
-                                    resolve('Image loaded and added to batch.');
+                                    // Add to batch for classification.
+                                    // include the binary (ArrayBuffer) so the worker doesn't re-download.
+                                    try {
+                                        const buffer = await blob.arrayBuffer(); // MDN: Blob.arrayBuffer() returns ArrayBuffer
+                                        batchLinks.push({ img: link, link: link, blobUrl: imgUrl, buffer });
+                                        resolve('Image loaded and added to batch (with buffer).');
+                                    } catch (err) {
+                                        // If arrayBuffer fails for any reason, fallback to pushing without buffer (worker will re-download)
+                                        console.warn('Failed to get arrayBuffer from blob, falling back to URL', err);
+                                        batchLinks.push({ img: link, link: link, blobUrl: imgUrl });
+                                        resolve('Image loaded and added to batch (without buffer).');
+                                    }
                                 }
                             }
                         } catch (error) {
@@ -287,24 +379,30 @@ function displayImage(imgUrl, link) {
     img.setAttribute("data-link", link);
     img.onclick = () => window.open(link, '_blank').focus();
 
+    // Revoke blob URL only after the DOM image actually finishes loading to avoid blanks.
+    img.onload = () => {
+        try {
+            // Extract the unique code from the Imgur URL to store in blockedUrls
+            const urlParts = link.match(/imgur\.com\/(.+)\.jpg/);
+            if (urlParts && urlParts[1]) {
+                blockedUrls.add(urlParts[1]); // Add the code only, not the full URL
+            }
+            // Free up the blob URL memory once the image has fully rendered
+            URL.revokeObjectURL(imgUrl);
+        } catch (e) {
++            console.warn('Failed to revoke object URL after image load:', e);
+        }
+    };
+
     // Append the image to the DOM and update the application state
     container.appendChild(img); 
     successfulLoads++;
-	
-    // Extract the unique code from the Imgur URL to store in blockedUrls
-    const urlParts = link.match(/imgur\.com\/(.+)\.jpg/);
-    if (urlParts && urlParts[1]) {
-        blockedUrls.add(urlParts[1]); // Add the code only, not the full URL
-    }
-
-    // Free up the blob URL memory
-    URL.revokeObjectURL(imgUrl);
 }
 
 
 // Load previously used URLs from IndexedDB
 async function loadBlockedUrls() {
-  if (!db || blockedUrls.size == 0) return; // Skip if IndexedDB is not initialized or blockedUrls is empty
+  if (!db) return; // allow load when blockedUrls is empty
   return new Promise((resolve, reject) => {
     const transaction = db.transaction("blockedUrls", "readonly");
     const objectStore = transaction.objectStore("blockedUrls");
@@ -355,7 +453,7 @@ function saveBlockedUrls() {
 
 // Event listener to update button status based on classification selector changes
 function updateLoadButtonStatus() {
-    if ((classificationSelector.value.toLowerCase() !== "All") && !modelLoaded) {
+    if ((classificationSelector.value.toLowerCase() !== "all") && !modelLoaded) {
         reload.disabled = true;
         console.log("Waiting for model to load before enabling 'Load' button for SFW/NSFW classification.");
     } else {
